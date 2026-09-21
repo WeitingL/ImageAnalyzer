@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">ImageAnalyzer</string>
+    <string name="home_title">Image Analyzer</string>
+    <string name="empty_slot_title">上傳一張圖片</string>
+    <string name="empty_slot_subtitle">從相簿選一張圖片，接著就能在裝置端進行分析。</string>
+    <string name="pick_image">選擇圖片</string>
+    <string name="pick_another_image">更換圖片</string>
+    <string name="remove_image">移除</string>
+    <string name="image_load_failed">無法載入這張圖片</string>
+    <string name="selected_image_description">已選擇的圖片</string>
+    <string name="detail_file_name">檔名</string>
+    <string name="detail_dimensions">尺寸</string>
+    <string name="detail_file_size">檔案大小</string>
+</resources>
