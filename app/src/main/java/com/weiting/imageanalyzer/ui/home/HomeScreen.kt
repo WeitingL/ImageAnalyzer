@@ -1,6 +1,5 @@
 package com.weiting.imageanalyzer.ui.home
 
-import android.net.Uri
 import android.text.format.Formatter
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -32,19 +31,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -52,41 +47,46 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.weiting.imageanalyzer.R
+import com.weiting.imageanalyzer.data.ImageDetails
+import com.weiting.imageanalyzer.data.ShareCheckStatus
 import com.weiting.imageanalyzer.ui.theme.ImageAnalyzerTheme
-import kotlinx.coroutines.launch
+import org.koin.androidx.compose.koinViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    // Saveable so the pick survives rotation; the state below is re-derived from it.
-    var selectedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
-    var state by remember { mutableStateOf<ImageUiState>(ImageUiState.Empty) }
-    var shareCheck by remember { mutableStateOf<ShareCheckState>(ShareCheckState.Idle) }
-    val scope = rememberCoroutineScope()
+fun HomeScreen(
+    modifier: Modifier = Modifier,
+    viewModel: HomeViewModel = koinViewModel(),
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
     val pickImage = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
-    ) { uri -> if (uri != null) selectedUri = uri }
+    ) { uri -> if (uri != null) viewModel.onImagePicked(uri) }
 
-    LaunchedEffect(selectedUri) {
-        val uri = selectedUri
-        shareCheck = ShareCheckState.Idle
-        if (uri == null) {
-            state = ImageUiState.Empty
-            return@LaunchedEffect
-        }
-        state = ImageUiState.Loading
-        state = loadImage(context, uri)
-    }
+    HomeContent(
+        state = uiState,
+        onPickImage = {
+            pickImage.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+            )
+        },
+        onClearImage = viewModel::onImageCleared,
+        onRunShareCheck = viewModel::onRunShareCheck,
+        modifier = modifier,
+    )
+}
 
-    val launchPicker = {
-        pickImage.launch(
-            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-        )
-    }
-
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeContent(
+    state: HomeUiState,
+    onPickImage: () -> Unit,
+    onClearImage: () -> Unit,
+    onRunShareCheck: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Scaffold(
         modifier = modifier,
         topBar = { TopAppBar(title = { Text(stringResource(R.string.home_title)) }) },
@@ -98,14 +98,14 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 16.dp),
         ) {
-            when (val current = state) {
-                ImageUiState.Empty -> EmptyImageSlot(onPick = launchPicker)
+            when (val image = state.image) {
+                ImageState.Empty -> EmptyImageSlot(onPick = onPickImage)
 
-                ImageUiState.Loading -> ImageSlotFrame {
+                ImageState.Loading -> ImageSlotFrame {
                     CircularProgressIndicator()
                 }
 
-                ImageUiState.Failed -> ImageSlotFrame {
+                ImageState.Failed -> ImageSlotFrame {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
                             text = stringResource(R.string.image_load_failed),
@@ -114,35 +114,28 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                             textAlign = TextAlign.Center,
                         )
                         Spacer(Modifier.height(16.dp))
-                        Button(onClick = launchPicker) {
+                        Button(onClick = onPickImage) {
                             Text(stringResource(R.string.pick_another_image))
                         }
                     }
                 }
 
-                is ImageUiState.Ready -> {
-                    ImagePreview(state = current)
+                is ImageState.Ready -> {
+                    ImagePreview(image)
                     Spacer(Modifier.height(20.dp))
-                    ImageDetailsList(details = current.details)
+                    ImageDetailsList(details = image.image.details)
                     Spacer(Modifier.height(20.dp))
-                    ShareCheckSection(
-                        state = shareCheck,
-                        onRun = {
-                            scope.launch {
-                                checkShareSuitability(current.source).collect { shareCheck = it }
-                            }
-                        },
-                    )
+                    ShareCheckSection(status = state.shareCheck, onRun = onRunShareCheck)
                     Spacer(Modifier.height(24.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         FilledTonalButton(
-                            onClick = launchPicker,
+                            onClick = onPickImage,
                             modifier = Modifier.weight(1f),
                         ) {
                             Text(stringResource(R.string.pick_another_image))
                         }
                         OutlinedButton(
-                            onClick = { selectedUri = null },
+                            onClick = onClearImage,
                             modifier = Modifier.weight(1f),
                         ) {
                             Text(stringResource(R.string.remove_image))
@@ -215,19 +208,22 @@ private fun ImageSlotFrame(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun ImagePreview(state: ImageUiState.Ready) {
+private fun ImagePreview(image: ImageState.Ready) {
+    val bitmap = image.image.bitmap
+    // Converting is cheap but not free, and the bitmap outlives recomposition.
+    val imageBitmap = remember(bitmap) { bitmap.asImageBitmap() }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
     ) {
         Image(
-            bitmap = state.bitmap,
+            bitmap = imageBitmap,
             contentDescription = stringResource(R.string.selected_image_description),
             contentScale = ContentScale.Fit,
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(state.bitmap.width.toFloat() / state.bitmap.height)
+                .aspectRatio(imageBitmap.width.toFloat() / imageBitmap.height)
                 .clip(RoundedCornerShape(24.dp)),
         )
     }
@@ -253,38 +249,38 @@ private fun ImageDetailsList(details: ImageDetails) {
     }
 }
 
-/** Runs the on-device share-suitability check and shows whatever Gemini Nano came back with. */
+/** Runs the on-device share-suitability check and shows whatever the model came back with. */
 @Composable
-private fun ShareCheckSection(state: ShareCheckState, onRun: () -> Unit) {
+private fun ShareCheckSection(status: ShareCheckStatus, onRun: () -> Unit) {
     val context = LocalContext.current
     HorizontalDivider()
     Spacer(Modifier.height(20.dp))
 
-    when (state) {
-        ShareCheckState.Idle -> Button(
+    when (status) {
+        ShareCheckStatus.Idle -> Button(
             onClick = onRun,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(stringResource(R.string.run_share_check))
         }
 
-        ShareCheckState.Preparing -> ProgressRow(stringResource(R.string.share_check_preparing))
+        ShareCheckStatus.Preparing -> ProgressRow(stringResource(R.string.share_check_preparing))
 
-        is ShareCheckState.Downloading -> Column {
+        is ShareCheckStatus.Downloading -> Column {
             Text(
                 text = stringResource(R.string.share_check_downloading),
                 style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(Modifier.height(8.dp))
-            if (state.totalBytes > 0) {
+            if (status.totalBytes > 0) {
                 LinearProgressIndicator(
-                    progress = { state.downloadedBytes.toFloat() / state.totalBytes },
+                    progress = { status.downloadedBytes.toFloat() / status.totalBytes },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "${Formatter.formatShortFileSize(context, state.downloadedBytes)}" +
-                        " / ${Formatter.formatShortFileSize(context, state.totalBytes)}",
+                    text = Formatter.formatShortFileSize(context, status.downloadedBytes) +
+                        " / " + Formatter.formatShortFileSize(context, status.totalBytes),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -293,9 +289,9 @@ private fun ShareCheckSection(state: ShareCheckState, onRun: () -> Unit) {
             }
         }
 
-        ShareCheckState.Analyzing -> ProgressRow(stringResource(R.string.share_check_analyzing))
+        ShareCheckStatus.Analyzing -> ProgressRow(stringResource(R.string.share_check_analyzing))
 
-        is ShareCheckState.Done -> Column {
+        is ShareCheckStatus.Done -> Column {
             Text(
                 text = stringResource(R.string.share_check_result),
                 style = MaterialTheme.typography.titleMedium,
@@ -307,7 +303,7 @@ private fun ShareCheckSection(state: ShareCheckState, onRun: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
-                    text = state.answer,
+                    text = status.answer,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(16.dp),
                 )
@@ -324,15 +320,15 @@ private fun ShareCheckSection(state: ShareCheckState, onRun: () -> Unit) {
             }
         }
 
-        ShareCheckState.Unsupported -> Text(
+        ShareCheckStatus.Unsupported -> Text(
             text = stringResource(R.string.share_check_unsupported),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error,
         )
 
-        is ShareCheckState.Failed -> Column {
+        is ShareCheckStatus.Failed -> Column {
             Text(
-                text = stringResource(R.string.share_check_failed, state.message),
+                text = stringResource(R.string.share_check_failed, status.message),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -373,10 +369,16 @@ private fun DetailRow(label: String, value: String) {
     }
 }
 
+// Previews the stateless half, so no Koin graph is needed.
 @Preview(showBackground = true)
 @Composable
-private fun HomeScreenPreview() {
+private fun HomeContentPreview() {
     ImageAnalyzerTheme {
-        HomeScreen()
+        HomeContent(
+            state = HomeUiState(),
+            onPickImage = {},
+            onClearImage = {},
+            onRunShareCheck = {},
+        )
     }
 }
