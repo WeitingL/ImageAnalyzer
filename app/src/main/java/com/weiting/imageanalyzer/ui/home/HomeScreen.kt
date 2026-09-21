@@ -23,6 +23,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -34,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -51,6 +54,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.weiting.imageanalyzer.R
 import com.weiting.imageanalyzer.ui.theme.ImageAnalyzerTheme
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,6 +63,8 @@ fun HomeScreen(modifier: Modifier = Modifier) {
     // Saveable so the pick survives rotation; the state below is re-derived from it.
     var selectedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var state by remember { mutableStateOf<ImageUiState>(ImageUiState.Empty) }
+    var shareCheck by remember { mutableStateOf<ShareCheckState>(ShareCheckState.Idle) }
+    val scope = rememberCoroutineScope()
 
     val pickImage = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
@@ -66,6 +72,7 @@ fun HomeScreen(modifier: Modifier = Modifier) {
 
     LaunchedEffect(selectedUri) {
         val uri = selectedUri
+        shareCheck = ShareCheckState.Idle
         if (uri == null) {
             state = ImageUiState.Empty
             return@LaunchedEffect
@@ -117,6 +124,15 @@ fun HomeScreen(modifier: Modifier = Modifier) {
                     ImagePreview(state = current)
                     Spacer(Modifier.height(20.dp))
                     ImageDetailsList(details = current.details)
+                    Spacer(Modifier.height(20.dp))
+                    ShareCheckSection(
+                        state = shareCheck,
+                        onRun = {
+                            scope.launch {
+                                checkShareSuitability(current.source).collect { shareCheck = it }
+                            }
+                        },
+                    )
                     Spacer(Modifier.height(24.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         FilledTonalButton(
@@ -234,6 +250,108 @@ private fun ImageDetailsList(details: ImageDetails) {
                 value = Formatter.formatShortFileSize(context, it),
             )
         }
+    }
+}
+
+/** Runs the on-device share-suitability check and shows whatever Gemini Nano came back with. */
+@Composable
+private fun ShareCheckSection(state: ShareCheckState, onRun: () -> Unit) {
+    val context = LocalContext.current
+    HorizontalDivider()
+    Spacer(Modifier.height(20.dp))
+
+    when (state) {
+        ShareCheckState.Idle -> Button(
+            onClick = onRun,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(stringResource(R.string.run_share_check))
+        }
+
+        ShareCheckState.Preparing -> ProgressRow(stringResource(R.string.share_check_preparing))
+
+        is ShareCheckState.Downloading -> Column {
+            Text(
+                text = stringResource(R.string.share_check_downloading),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(8.dp))
+            if (state.totalBytes > 0) {
+                LinearProgressIndicator(
+                    progress = { state.downloadedBytes.toFloat() / state.totalBytes },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "${Formatter.formatShortFileSize(context, state.downloadedBytes)}" +
+                        " / ${Formatter.formatShortFileSize(context, state.totalBytes)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        }
+
+        ShareCheckState.Analyzing -> ProgressRow(stringResource(R.string.share_check_analyzing))
+
+        is ShareCheckState.Done -> Column {
+            Text(
+                text = stringResource(R.string.share_check_result),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(Modifier.height(8.dp))
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = state.answer,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.share_check_disclaimer),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(onClick = onRun, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.share_check_rerun))
+            }
+        }
+
+        ShareCheckState.Unsupported -> Text(
+            text = stringResource(R.string.share_check_unsupported),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.error,
+        )
+
+        is ShareCheckState.Failed -> Column {
+            Text(
+                text = stringResource(R.string.share_check_failed, state.message),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(onClick = onRun, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.share_check_rerun))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProgressRow(label: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        CircularProgressIndicator(modifier = Modifier.height(20.dp).aspectRatio(1f))
+        Text(text = label, style = MaterialTheme.typography.bodyMedium)
     }
 }
 

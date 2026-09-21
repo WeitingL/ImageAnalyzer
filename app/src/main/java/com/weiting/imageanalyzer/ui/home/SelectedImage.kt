@@ -9,6 +9,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 /**
  * Longest edge we keep when decoding. Large enough to stay sharp on screen, small enough that a
@@ -41,6 +42,8 @@ data class ImageDetails(
 
 /** Decodes [uri] into a software bitmap that both Compose and on-device models can read. */
 suspend fun loadImage(context: Context, uri: Uri): ImageUiState = withContext(Dispatchers.IO) {
+    Timber.i("decoding image %s", uri)
+    val startMs = System.currentTimeMillis()
     runCatching {
         val source = ImageDecoder.createSource(context.contentResolver, uri)
         val bitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
@@ -48,9 +51,25 @@ suspend fun loadImage(context: Context, uri: Uri): ImageUiState = withContext(Di
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             val longestEdge = maxOf(info.size.width, info.size.height)
             if (longestEdge > MAX_EDGE_PX) {
-                decoder.setTargetSampleSize(longestEdge / MAX_EDGE_PX)
+                val sampleSize = longestEdge / MAX_EDGE_PX
+                Timber.d(
+                    "source %dx%d exceeds %dpx, sampling by %d",
+                    info.size.width,
+                    info.size.height,
+                    MAX_EDGE_PX,
+                    sampleSize,
+                )
+                decoder.setTargetSampleSize(sampleSize)
             }
         }
+        Timber.i(
+            "decoded to %dx%d (%s, %d KB) in %d ms",
+            bitmap.width,
+            bitmap.height,
+            bitmap.config,
+            bitmap.allocationByteCount / 1024,
+            System.currentTimeMillis() - startMs,
+        )
         ImageUiState.Ready(
             bitmap = bitmap.asImageBitmap(),
             source = bitmap,
@@ -61,8 +80,9 @@ suspend fun loadImage(context: Context, uri: Uri): ImageUiState = withContext(Di
                 height = bitmap.height,
             ),
         )
-    }.getOrElse {
+    }.getOrElse { e ->
         // A picker grant does not survive process death, so a restored Uri can legitimately fail.
+        Timber.e(e, "failed to decode %s", uri)
         ImageUiState.Failed
     }
 }

@@ -11,4 +11,13 @@
     <string name="detail_file_name">檔名</string>
     <string name="detail_dimensions">尺寸</string>
     <string name="detail_file_size">檔案大小</string>
+    <string name="run_share_check">檢查是否適合分享</string>
+    <string name="share_check_preparing">檢查裝置支援狀態…</string>
+    <string name="share_check_downloading">正在下載裝置端模型（只需一次）</string>
+    <string name="share_check_analyzing">裝置端分析中…</string>
+    <string name="share_check_result">分析結果</string>
+    <string name="share_check_rerun">重新分析</string>
+    <string name="share_check_disclaimer">由裝置端 Gemini Nano 產生，僅供參考，不是內容審查保證。</string>
+    <string name="share_check_unsupported">這台裝置不支援裝置端 Gemini Nano。</string>
+    <string name="share_check_failed">分析失敗：%1$s</string>
 </resources>
